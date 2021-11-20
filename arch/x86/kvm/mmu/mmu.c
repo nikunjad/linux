@@ -5653,6 +5653,8 @@ restart:
  */
 static void kvm_mmu_zap_all_fast(struct kvm *kvm)
 {
+	LIST_HEAD(invalidated_roots);
+
 	lockdep_assert_held(&kvm->slots_lock);
 
 	write_lock(&kvm->mmu_lock);
@@ -5674,7 +5676,7 @@ static void kvm_mmu_zap_all_fast(struct kvm *kvm)
 	 * could drop the MMU lock and yield.
 	 */
 	if (is_tdp_mmu_enabled(kvm))
-		kvm_tdp_mmu_invalidate_all_roots(kvm);
+		kvm_tdp_mmu_invalidate_all_roots(kvm, &invalidated_roots);
 
 	/*
 	 * Notify all vcpus to reload its shadow page table and flush TLB.
@@ -5692,7 +5694,7 @@ static void kvm_mmu_zap_all_fast(struct kvm *kvm)
 
 	if (is_tdp_mmu_enabled(kvm)) {
 		read_lock(&kvm->mmu_lock);
-		kvm_tdp_mmu_zap_invalidated_roots(kvm);
+		kvm_tdp_mmu_zap_invalidated_roots(kvm, &invalidated_roots);
 		read_unlock(&kvm->mmu_lock);
 	}
 }
