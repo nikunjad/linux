@@ -11618,6 +11618,7 @@ void kvm_arch_free_memslot(struct kvm *kvm, struct kvm_memory_slot *slot)
 	}
 
 	kvm_page_track_free_memslot(slot);
+	static_call_cond(kvm_x86_free_memslot)(kvm, slot);
 }
 
 int memslot_rmap_alloc(struct kvm_memory_slot *slot, unsigned long npages)
@@ -11643,6 +11644,7 @@ int memslot_rmap_alloc(struct kvm_memory_slot *slot, unsigned long npages)
 }
 
 static int kvm_alloc_memslot_metadata(struct kvm *kvm,
+				      const struct kvm_memory_slot *old,
 				      struct kvm_memory_slot *slot)
 {
 	unsigned long npages = slot->npages;
@@ -11695,7 +11697,14 @@ static int kvm_alloc_memslot_metadata(struct kvm *kvm,
 	if (kvm_page_track_create_memslot(kvm, slot, npages))
 		goto out_free;
 
+	if (kvm_x86_ops.alloc_memslot_metadata &&
+	    static_call(kvm_x86_alloc_memslot_metadata)(kvm, old, slot))
+		goto out_free_page_track;
+
 	return 0;
+
+out_free_page_track:
+	kvm_page_track_free_memslot(slot);
 
 out_free:
 	memslot_rmap_free(slot);
@@ -11729,7 +11738,7 @@ int kvm_arch_prepare_memory_region(struct kvm *kvm,
 				   enum kvm_mr_change change)
 {
 	if (change == KVM_MR_CREATE || change == KVM_MR_MOVE)
-		return kvm_alloc_memslot_metadata(kvm, new);
+		return kvm_alloc_memslot_metadata(kvm, old, new);
 
 	if (change == KVM_MR_FLAGS_ONLY)
 		memcpy(&new->arch, &old->arch, sizeof(old->arch));

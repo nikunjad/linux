@@ -2945,3 +2945,53 @@ void sev_vcpu_deliver_sipi_vector(struct kvm_vcpu *vcpu, u8 vector)
 
 	ghcb_set_sw_exit_info_2(svm->sev_es.ghcb, 1);
 }
+
+void sev_free_memslot(struct kvm *kvm, struct kvm_memory_slot *slot)
+{
+	struct kvm_arch_memory_slot *aslot = &slot->arch;
+
+	if (!sev_guest(kvm))
+		return;
+
+	if (aslot->pinned_bitmap) {
+		kvfree(aslot->pinned_bitmap);
+		aslot->pinned_bitmap = NULL;
+	}
+
+	if (aslot->pfns) {
+		kvfree(aslot->pfns);
+		aslot->pfns = NULL;
+	}
+}
+
+int sev_alloc_memslot_metadata(struct kvm *kvm,
+			       const struct kvm_memory_slot *old,
+			       struct kvm_memory_slot *new)
+{
+	struct kvm_arch_memory_slot *aslot = &new->arch;
+	unsigned long pinned_bytes = new->npages * sizeof(kvm_pfn_t);
+
+	if (!sev_guest(kvm))
+		return 0;
+
+	if (old && old->arch.pinned_bitmap && old->arch.pfns) {
+		WARN_ON(old->npages != new->npages);
+		aslot->pinned_bitmap = old->arch.pinned_bitmap;
+		aslot->pfns = old->arch.pfns;
+		return 0;
+	}
+
+	aslot->pfns = kvcalloc(new->npages, sizeof(*aslot->pfns),
+			      GFP_KERNEL_ACCOUNT);
+	if (!aslot->pfns)
+		return -ENOMEM;
+
+	aslot->pinned_bitmap = kvzalloc(pinned_bytes, GFP_KERNEL_ACCOUNT);
+	if (!aslot->pinned_bitmap) {
+		kvfree(aslot->pfns);
+		aslot->pfns = NULL;
+		return -ENOMEM;
+	}
+	bitmap_clear(aslot->pinned_bitmap, 0, new->npages);
+	return 0;
+}

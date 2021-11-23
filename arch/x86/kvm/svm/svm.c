@@ -4718,6 +4718,9 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
 	.complete_emulated_msr = svm_complete_emulated_msr,
 
 	.vcpu_deliver_sipi_vector = svm_vcpu_deliver_sipi_vector,
+
+	.alloc_memslot_metadata = sev_alloc_memslot_metadata,
+	.free_memslot = sev_free_memslot,
 };
 
 static struct kvm_x86_init_ops svm_init_ops __initdata = {

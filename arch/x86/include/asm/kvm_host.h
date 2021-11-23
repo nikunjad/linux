@@ -923,6 +923,8 @@ struct kvm_arch_memory_slot {
 	struct kvm_rmap_head *rmap[KVM_NR_PAGE_SIZES];
 	struct kvm_lpage_info *lpage_info[KVM_NR_PAGE_SIZES - 1];
 	unsigned short *gfn_track[KVM_PAGE_TRACK_MAX];
+	unsigned long *pinned_bitmap;
+	kvm_pfn_t *pfns;
 };
 
 /*
@@ -1411,6 +1413,11 @@ struct kvm_x86_ops {
 
 	void (*load_mmu_pgd)(struct kvm_vcpu *vcpu, hpa_t root_hpa,
 			     int root_level);
+	int (*alloc_memslot_metadata)(struct kvm *kvm,
+				      const struct kvm_memory_slot *old,
+				      struct kvm_memory_slot *new);
+	void (*free_memslot)(struct kvm *kvm,
+			     struct kvm_memory_slot *slot);
 	void (*pin_spte)(struct kvm *kvm, gfn_t gfn, enum pg_level level,
 			 kvm_pfn_t pfn);
 
