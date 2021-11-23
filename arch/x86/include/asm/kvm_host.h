@@ -1411,6 +1411,8 @@ struct kvm_x86_ops {
 
 	void (*load_mmu_pgd)(struct kvm_vcpu *vcpu, hpa_t root_hpa,
 			     int root_level);
+	void (*pin_spte)(struct kvm *kvm, gfn_t gfn, enum pg_level level,
+			 kvm_pfn_t pfn);
 
 	bool (*has_wbinvd_exit)(void);
 

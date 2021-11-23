@@ -14,6 +14,8 @@
  */
 #define SPTE_MMU_PRESENT_MASK		BIT_ULL(11)
 
+#define SPTE_PRIVATE_ZAPPED		BIT_ULL(62)
+
 /*
  * TDP SPTES (more specifically, EPT SPTEs) may not have A/D bits, and may also
  * be restricted to using write-protection (for L2 when CPU dirty logging, i.e.
@@ -113,7 +115,7 @@ static_assert(!(EPT_SPTE_MMU_WRITABLE & SHADOW_ACC_TRACK_SAVED_MASK));
 #define MMIO_SPTE_GEN_LOW_END		10
 
 #define MMIO_SPTE_GEN_HIGH_START	52
-#define MMIO_SPTE_GEN_HIGH_END		62
+#define MMIO_SPTE_GEN_HIGH_END		61
 
 #define MMIO_SPTE_GEN_LOW_MASK		GENMASK_ULL(MMIO_SPTE_GEN_LOW_END, \
 						    MMIO_SPTE_GEN_LOW_START)
@@ -126,7 +128,7 @@ static_assert(!(SPTE_MMU_PRESENT_MASK &
 #define MMIO_SPTE_GEN_HIGH_BITS		(MMIO_SPTE_GEN_HIGH_END - MMIO_SPTE_GEN_HIGH_START + 1)
 
 /* remember to adjust the comment above as well if you change these */
-static_assert(MMIO_SPTE_GEN_LOW_BITS == 8 && MMIO_SPTE_GEN_HIGH_BITS == 11);
+static_assert(MMIO_SPTE_GEN_LOW_BITS == 8 && MMIO_SPTE_GEN_HIGH_BITS == 10);
 
 #define MMIO_SPTE_GEN_LOW_SHIFT		(MMIO_SPTE_GEN_LOW_START - 0)
 #define MMIO_SPTE_GEN_HIGH_SHIFT	(MMIO_SPTE_GEN_HIGH_START - MMIO_SPTE_GEN_LOW_BITS)
@@ -250,6 +252,11 @@ static inline u64 spte_shadow_dirty_mask(u64 spte)
 static inline bool is_access_track_spte(u64 spte)
 {
 	return !spte_ad_enabled(spte) && (spte & shadow_acc_track_mask) == 0;
+}
+
+static inline bool is_zapped_private_pte(u64 pte)
+{
+	return !!(pte & SPTE_PRIVATE_ZAPPED);
 }
 
 static inline bool is_large_pte(u64 pte)

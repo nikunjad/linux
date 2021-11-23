@@ -400,7 +400,7 @@ static void handle_removed_tdp_mmu_page(struct kvm *kvm, tdp_ptep_t pt,
 			 */
 			for (;;) {
 				old_child_spte = xchg(sptep, REMOVED_SPTE);
-				if (!is_removed_spte(old_child_spte))
+				if (!is_removed_spte(old_child_spte & REMOVED_SPTE))
 					break;
 				cpu_relax();
 			}
@@ -415,7 +415,8 @@ static void handle_removed_tdp_mmu_page(struct kvm *kvm, tdp_ptep_t pt,
 			 * unreachable.
 			 */
 			old_child_spte = READ_ONCE(*sptep);
-			if (!is_shadow_present_pte(old_child_spte))
+			if (!is_shadow_present_pte(old_child_spte) &&
+			    !is_zapped_private_pte(old_child_spte))
 				continue;
 
 			/*
@@ -524,6 +525,13 @@ static void __handle_changed_spte(struct kvm *kvm, int as_id, gfn_t gfn,
 	if (was_leaf && is_dirty_spte(old_spte) &&
 	    (!is_present || !is_dirty_spte(new_spte) || pfn_changed))
 		kvm_set_pfn_dirty(spte_to_pfn(old_spte));
+
+	/*
+	 * Call the vendor code to handle the pinning
+	 */
+	if (is_present && is_leaf)
+		static_call_cond(kvm_x86_pin_spte)(kvm, gfn, level,
+						   spte_to_pfn(new_spte));
 
 	/*
 	 * Recursively handle child PTs if the change removed a subtree from
@@ -696,7 +704,8 @@ static inline void tdp_mmu_set_spte_no_dirty_log(struct kvm *kvm,
 
 #define tdp_root_for_each_leaf_pte(_iter, _root, _start, _end)	\
 	tdp_root_for_each_pte(_iter, _root, _start, _end)		\
-		if (!is_shadow_present_pte(_iter.old_spte) ||		\
+		if ((!is_shadow_present_pte(_iter.old_spte) &&		\
+		     !is_zapped_private_pte(_iter.old_spte)) ||		\
 		    !is_last_spte(_iter.old_spte, _iter.level))		\
 			continue;					\
 		else
@@ -783,7 +792,8 @@ retry:
 		if (tdp_mmu_iter_cond_resched(kvm, &iter, false, shared))
 			continue;
 
-		if (!is_shadow_present_pte(iter.old_spte))
+		if (!is_shadow_present_pte(iter.old_spte) &&
+		    !is_zapped_private_pte(iter.old_spte))
 			continue;
 
 		if (!shared) {
@@ -823,6 +833,17 @@ bool kvm_tdp_mmu_zap_sp(struct kvm *kvm, struct kvm_mmu_page *sp)
 	return true;
 }
 
+static u64 mark_spte_zapped(struct kvm *kvm, struct tdp_iter *iter)
+{
+	u64 new_spte;
+
+	new_spte = SPTE_PRIVATE_ZAPPED |
+		   (spte_to_pfn(iter->old_spte) << PAGE_SHIFT) |
+		   is_large_pte(iter->old_spte) ? PT_PAGE_SIZE_MASK : 0;
+
+	return new_spte;
+}
+
 /*
  * Zap leafs SPTEs for the range of gfns, [start, end). Returns true if SPTEs
  * have been cleared and a TLB flush is needed before releasing the MMU lock.
@@ -856,7 +877,11 @@ static bool tdp_mmu_zap_leafs(struct kvm *kvm, struct kvm_mmu_page *root,
 		    !is_last_spte(iter.old_spte, iter.level))
 			continue;
 
-		tdp_mmu_set_spte(kvm, &iter, 0);
+		if (is_zapped_private_pte(iter.old_spte))
+			continue;
+
+		tdp_mmu_set_spte(kvm, &iter, mark_spte_zapped(kvm, &iter));
+
 		flush = true;
 	}
 
