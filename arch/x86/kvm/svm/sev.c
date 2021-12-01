@@ -66,14 +66,6 @@ static unsigned int nr_asids;
 static unsigned long *sev_asid_bitmap;
 static unsigned long *sev_reclaim_asid_bitmap;
 
-struct enc_region {
-	struct list_head list;
-	unsigned long npages;
-	struct page **pages;
-	unsigned long uaddr;
-	unsigned long size;
-};
-
 /* Called with the sev_bitmap_lock held, or on shutdown  */
 static int sev_flush_asids(int min_asid, int max_asid)
 {
@@ -256,8 +248,6 @@ static int sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	ret = sev_platform_init(&argp->error);
 	if (ret)
 		goto e_free;
-
-	INIT_LIST_HEAD(&sev->regions_list);
 
 	return 0;
 
@@ -1637,8 +1627,6 @@ static void sev_migrate_from(struct kvm_sev_info *dst,
 	src->handle = 0;
 	src->pages_locked = 0;
 	src->enc_context_owner = NULL;
-
-	list_cut_before(&dst->regions_list, &src->regions_list, &src->regions_list);
 }
 
 static int sev_es_migrate_from(struct kvm *dst, struct kvm *src)
@@ -1861,115 +1849,13 @@ out:
 int svm_register_enc_region(struct kvm *kvm,
 			    struct kvm_enc_region *range)
 {
-	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
-	struct enc_region *region;
-	int ret = 0;
-
-	if (!sev_guest(kvm))
-		return -ENOTTY;
-
-	/* If kvm is mirroring encryption context it isn't responsible for it */
-	if (is_mirroring_enc_context(kvm))
-		return -EINVAL;
-
-	if (range->addr > ULONG_MAX || range->size > ULONG_MAX)
-		return -EINVAL;
-
-	region = kzalloc(sizeof(*region), GFP_KERNEL_ACCOUNT);
-	if (!region)
-		return -ENOMEM;
-
-	mutex_lock(&kvm->lock);
-	region->pages = sev_pin_memory(kvm, range->addr, range->size, &region->npages, 1);
-	if (IS_ERR(region->pages)) {
-		ret = PTR_ERR(region->pages);
-		mutex_unlock(&kvm->lock);
-		goto e_free;
-	}
-
-	region->uaddr = range->addr;
-	region->size = range->size;
-
-	list_add_tail(&region->list, &sev->regions_list);
-	mutex_unlock(&kvm->lock);
-
-	/*
-	 * The guest may change the memory encryption attribute from C=0 -> C=1
-	 * or vice versa for this memory range. Lets make sure caches are
-	 * flushed to ensure that guest data gets written into memory with
-	 * correct C-bit.
-	 */
-	sev_clflush_pages(region->pages, region->npages);
-
-	return ret;
-
-e_free:
-	kfree(region);
-	return ret;
-}
-
-static struct enc_region *
-find_enc_region(struct kvm *kvm, struct kvm_enc_region *range)
-{
-	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
-	struct list_head *head = &sev->regions_list;
-	struct enc_region *i;
-
-	list_for_each_entry(i, head, list) {
-		if (i->uaddr == range->addr &&
-		    i->size == range->size)
-			return i;
-	}
-
-	return NULL;
-}
-
-static void __unregister_enc_region_locked(struct kvm *kvm,
-					   struct enc_region *region)
-{
-	sev_unpin_memory(kvm, region->pages, region->npages);
-	list_del(&region->list);
-	kfree(region);
+	return 0;
 }
 
 int svm_unregister_enc_region(struct kvm *kvm,
 			      struct kvm_enc_region *range)
 {
-	struct enc_region *region;
-	int ret;
-
-	/* If kvm is mirroring encryption context it isn't responsible for it */
-	if (is_mirroring_enc_context(kvm))
-		return -EINVAL;
-
-	mutex_lock(&kvm->lock);
-
-	if (!sev_guest(kvm)) {
-		ret = -ENOTTY;
-		goto failed;
-	}
-
-	region = find_enc_region(kvm, range);
-	if (!region) {
-		ret = -EINVAL;
-		goto failed;
-	}
-
-	/*
-	 * Ensure that all guest tagged cache entries are flushed before
-	 * releasing the pages back to the system for use. CLFLUSH will
-	 * not do this, so issue a WBINVD.
-	 */
-	wbinvd_on_all_cpus();
-
-	__unregister_enc_region_locked(kvm, region);
-
-	mutex_unlock(&kvm->lock);
 	return 0;
-
-failed:
-	mutex_unlock(&kvm->lock);
-	return ret;
 }
 
 int svm_vm_copy_asid_from(struct kvm *kvm, unsigned int source_fd)
@@ -2018,7 +1904,6 @@ int svm_vm_copy_asid_from(struct kvm *kvm, unsigned int source_fd)
 	mirror_sev->fd = source_sev->fd;
 	mirror_sev->es_active = source_sev->es_active;
 	mirror_sev->handle = source_sev->handle;
-	INIT_LIST_HEAD(&mirror_sev->regions_list);
 	ret = 0;
 
 	/*
@@ -2038,8 +1923,6 @@ e_source_fput:
 void sev_vm_destroy(struct kvm *kvm)
 {
 	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
-	struct list_head *head = &sev->regions_list;
-	struct list_head *pos, *q;
 
 	WARN_ON(sev->num_mirrored_vms);
 
@@ -2065,18 +1948,6 @@ void sev_vm_destroy(struct kvm *kvm)
 	 * not do this, so issue a WBINVD.
 	 */
 	wbinvd_on_all_cpus();
-
-	/*
-	 * if userspace was terminated before unregistering the memory regions
-	 * then lets unpin all the registered memory.
-	 */
-	if (!list_empty(head)) {
-		list_for_each_safe(pos, q, head) {
-			__unregister_enc_region_locked(kvm,
-				list_entry(pos, struct enc_region, list));
-			cond_resched();
-		}
-	}
 
 	sev_unbind_asid(kvm, sev->handle);
 	sev_asid_free(sev);
@@ -2946,13 +2817,100 @@ void sev_vcpu_deliver_sipi_vector(struct kvm_vcpu *vcpu, u8 vector)
 	ghcb_set_sw_exit_info_2(svm->sev_es.ghcb, 1);
 }
 
-void sev_free_memslot(struct kvm *kvm, struct kvm_memory_slot *slot)
+void sev_pin_spte(struct kvm *kvm, gfn_t gfn, enum pg_level level,
+		  kvm_pfn_t pfn)
 {
-	struct kvm_arch_memory_slot *aslot = &slot->arch;
+	struct kvm_arch_memory_slot *aslot;
+	struct kvm_memory_slot *slot;
+	gfn_t rel_gfn, pin_pfn;
+	unsigned long npages;
+	kvm_pfn_t old_pfn;
+	int i;
 
 	if (!sev_guest(kvm))
 		return;
 
+	if (WARN_ON_ONCE(is_error_noslot_pfn(pfn) || kvm_is_reserved_pfn(pfn)))
+		return;
+
+	/* Only support 4KB and 2MB pages, 1GB is not tested */
+	if (KVM_BUG_ON(level > PG_LEVEL_2M, kvm))
+		return;
+
+	slot = gfn_to_memslot(kvm, gfn);
+	if (!slot || !slot->arch.pfns)
+		return;
+
+	/*
+	 * Use relative gfn index within the memslot for the bitmap as well as
+	 * the pfns array
+	 */
+	rel_gfn = gfn - slot->base_gfn;
+	aslot = &slot->arch;
+	pin_pfn = pfn;
+	npages = KVM_PAGES_PER_HPAGE(level);
+
+	/* Pin the page, KVM doesn't yet support page migration. */
+	for (i = 0; i < npages; i++, rel_gfn++, pin_pfn++) {
+		if (test_bit(rel_gfn, aslot->pinned_bitmap)) {
+			old_pfn = aslot->pfns[rel_gfn];
+			if (old_pfn == pin_pfn)
+				continue;
+
+			put_page(pfn_to_page(old_pfn));
+		}
+
+		set_bit(rel_gfn, aslot->pinned_bitmap);
+		aslot->pfns[rel_gfn] = pin_pfn;
+		get_page(pfn_to_page(pin_pfn));
+	}
+
+	/*
+	 * Flush any cached lines of the page being added since "ownership" of
+	 * it will be transferred from the host to an encrypted guest.
+	 */
+	clflush_cache_range(__va(pfn << PAGE_SHIFT), page_level_size(level));
+}
+
+static void sev_drop_pinned_spte(struct kvm_memory_slot *slot, gfn_t gfn,
+				 kvm_pfn_t pfn)
+{
+	gfn_t rel_gfn;
+
+	if (!slot || !slot->arch.pfns)
+		return;
+
+	rel_gfn = gfn - slot->base_gfn;
+	pfn = slot->arch.pfns[rel_gfn];
+	put_page(pfn_to_page(pfn));
+	slot->arch.pfns[rel_gfn] = 0;
+}
+
+
+void sev_free_memslot(struct kvm *kvm, struct kvm_memory_slot *slot)
+{
+	struct kvm_arch_memory_slot *aslot = &slot->arch;
+	kvm_pfn_t *pfns;
+	gfn_t gfn;
+	int i;
+
+	if (!sev_guest(kvm))
+		return;
+
+	if (!aslot->pinned_bitmap || !slot->arch.pfns)
+		goto out;
+
+	pfns = aslot->pfns;
+
+	/*
+	 * Iterate the memslot to find the pinned pfn using the bitmap and drop
+	 * the pfn stored.
+	 */
+	for (i = 0, gfn = slot->base_gfn; i < slot->npages; i++, gfn++)
+		if (test_and_clear_bit(i, aslot->pinned_bitmap) && pfns[i])
+			sev_drop_pinned_spte(slot, gfn, pfns[i]);
+
+out:
 	if (aslot->pinned_bitmap) {
 		kvfree(aslot->pinned_bitmap);
 		aslot->pinned_bitmap = NULL;

@@ -77,7 +77,6 @@ struct kvm_sev_info {
 	unsigned int handle;	/* SEV firmware handle */
 	int fd;			/* SEV device fd */
 	unsigned long pages_locked; /* Number of pages locked */
-	struct list_head regions_list;  /* List of registered regions */
 	u64 ap_jump_table;	/* SEV-ES AP Jump Table address */
 	struct kvm *enc_context_owner; /* Owner of copied encryption context */
 	unsigned long num_mirrored_vms; /* Number of VMs sharing this ASID */
@@ -648,5 +647,7 @@ int sev_alloc_memslot_metadata(struct kvm *kvm,
 			       struct kvm_memory_slot *new);
 void sev_free_memslot(struct kvm *kvm,
 		      struct kvm_memory_slot *slot);
+void sev_pin_spte(struct kvm *kvm, gfn_t gfn, enum pg_level level,
+		  kvm_pfn_t pfn);
 
 #endif
