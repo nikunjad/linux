@@ -30,7 +30,7 @@
 #define	IOPM_SIZE PAGE_SIZE * 3
 #define	MSRPM_SIZE PAGE_SIZE * 2
 
-#define MAX_DIRECT_ACCESS_MSRS	47
+#define MAX_DIRECT_ACCESS_MSRS	48
 #define MSRPM_OFFSETS	32
 extern u32 msrpm_offsets[MSRPM_OFFSETS] __read_mostly;
 extern bool npt_enabled;
@@ -77,7 +77,8 @@ enum {
 #define VMCB_ALWAYS_DIRTY_MASK	((1U << VMCB_INTR) | (1U << VMCB_CR2))
 
 /* Supported init feature flags */
-#define SEV_SNP_SUPPORTED_FLAGS		0x0
+#define SEV_SNP_FEAT_SECURE_TSC		BIT_ULL(0)
+#define SEV_SNP_SUPPORTED_FLAGS		(BIT_ULL(1) - 1)
 
 struct kvm_sev_info {
 	bool active;		/* SEV enabled guest */
@@ -367,7 +368,13 @@ static __always_inline bool sev_snp_guest(struct kvm *kvm)
 
 static inline bool snp_secure_tsc_enabled(struct kvm *kvm)
 {
+#ifdef CONFIG_KVM_AMD_SEV
+	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
+
+	return !!(sev->snp_init_flags & SEV_SNP_FEAT_SECURE_TSC);
+#else
 	return false
+#endif
 }
 
 static inline bool ghcb_gpa_is_registered(struct vcpu_svm *svm, u64 val)

@@ -306,6 +306,7 @@ static void sev_unbind_asid(struct kvm *kvm, unsigned int handle)
 
 static int verify_snp_init_flags(struct kvm *kvm, struct kvm_sev_cmd *argp)
 {
+	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
 	struct kvm_snp_init params;
 	int ret = 0;
 
@@ -315,7 +316,10 @@ static int verify_snp_init_flags(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	if (params.flags & ~SEV_SNP_SUPPORTED_FLAGS)
 		ret = -EOPNOTSUPP;
 
-	params.flags = SEV_SNP_SUPPORTED_FLAGS;
+	sev->snp_init_flags = params.flags;
+
+	if (snp_secure_tsc_enabled(kvm) && !cpu_feature_enabled(X86_FEATURE_SNP_SECURE_TSC))
+		return -EOPNOTSUPP;
 
 	if (copy_to_user((void __user *)(uintptr_t)argp->data, &params, sizeof(params)))
 		ret = -EFAULT;
@@ -708,8 +712,14 @@ static int sev_es_sync_vmsa(struct vcpu_svm *svm)
 		save->sev_features |= SVM_SEV_FEAT_DEBUG_SWAP;
 
 	/* Enable the SEV-SNP feature */
-	if (sev_snp_guest(svm->vcpu.kvm))
+	if (sev_snp_guest(svm->vcpu.kvm)) {
 		save->sev_features |= SVM_SEV_FEAT_SNP_ACTIVE;
+		if (snp_secure_tsc_enabled(svm->vcpu.kvm)) {
+			save->sev_features |= SVM_SEV_FEAT_SECURE_TSC;
+			set_msr_interception(&svm->vcpu, svm->msrpm,
+					     MSR_AMD64_GUEST_TSC_FREQ, 1, 1);
+		}
+	}
 
 	/*
 	 * Save the VMSA synced SEV features. For now, they are the same for
@@ -2696,6 +2706,8 @@ void __init sev_set_cpu_caps(void)
 		kvm_cpu_cap_clear(X86_FEATURE_SEV);
 	if (!sev_es_enabled)
 		kvm_cpu_cap_clear(X86_FEATURE_SEV_ES);
+	if (cpu_feature_enabled(X86_FEATURE_SNP_SECURE_TSC))
+		kvm_cpu_cap_set(X86_FEATURE_SNP_SECURE_TSC);
 }
 
 void __init sev_hardware_setup(void)

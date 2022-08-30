@@ -140,6 +140,7 @@ static const struct svm_direct_access_msrs {
 	{ .index = X2APIC_MSR(APIC_TMICT),		.always = false },
 	{ .index = X2APIC_MSR(APIC_TMCCT),		.always = false },
 	{ .index = X2APIC_MSR(APIC_TDCR),		.always = false },
+	{ .index = MSR_AMD64_GUEST_TSC_FREQ,		.always = false },
 	{ .index = MSR_INVALID,				.always = false },
 };
 
@@ -3136,6 +3137,14 @@ static int svm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
 			break;
 
 		svm->tsc_aux = data;
+		break;
+	case MSR_IA32_TSC:
+		/* if secure tsc is enabled return #GP */
+		if (snp_secure_tsc_enabled(vcpu->kvm)) {
+			pr_err("SEV: Secure TSC enabled guest should not use MSR_IA32_TSC.\n");
+			vcpu_unimpl(vcpu, "unimplemented IA32_TSC secure tsc\n");
+			return KVM_MSR_RET_INVALID;
+		}
 		break;
 	case MSR_IA32_DEBUGCTLMSR:
 		if (!lbrv) {
