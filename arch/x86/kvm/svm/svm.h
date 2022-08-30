@@ -365,6 +365,11 @@ static __always_inline bool sev_snp_guest(struct kvm *kvm)
 	return sev_es_guest(kvm) && sev->snp_active;
 }
 
+static inline bool snp_secure_tsc_enabled(struct kvm *kvm)
+{
+	return false
+}
+
 static inline bool ghcb_gpa_is_registered(struct vcpu_svm *svm, u64 val)
 {
 	return svm->sev_es.ghcb_registered_gpa == val;

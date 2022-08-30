@@ -2042,6 +2042,13 @@ static int snp_launch_start(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	}
 
 	start.gctx_paddr = __psp_pa(sev->snp_context);
+	if (snp_secure_tsc_enabled(kvm)) {
+		if (!params.desired_tsc_freq)
+			return -EINVAL;
+
+		start.desired_tsc_freq = params.desired_tsc_freq;
+	}
+
 	start.policy = params.policy;
 	memcpy(start.gosvw, params.gosvw, sizeof(params.gosvw));
 	rc = __sev_issue_cmd(argp->sev_fd, SEV_CMD_SNP_LAUNCH_START, &start, &argp->error);
